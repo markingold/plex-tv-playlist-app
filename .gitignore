@@ -1,0 +1,23 @@
+# Ignore virtual environment directories
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+env/
+ENV/
+env.bak/
+venv.bak/
+pyvenv.cfg
+
+# Ignore Composer dependencies
+vendor/
+
+# Ignore database files
+database/*.db
+
+# Ignore log files
+logs/
+
+# Ignore .env
+.env
