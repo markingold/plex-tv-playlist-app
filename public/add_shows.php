@@ -1,78 +1,107 @@
 <?php
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
+declare(strict_types=1);
+
+// --- Strictly no output before potential redirects ---
+
+// (Optional) PHP error visibility while developing
+ini_set('display_errors', '1');
+ini_set('display_startup_errors', '1');
 error_reporting(E_ALL);
 
-require '../vendor/autoload.php'; // Include the Composer autoload file
+// Load env via composer if available (fails gracefully if vendor/ missing)
+$fatalError = null;
+if (is_file(__DIR__ . '/../vendor/autoload.php')) {
+    require __DIR__ . '/../vendor/autoload.php';
+    if (class_exists(\Dotenv\Dotenv::class)) {
+        try {
+            $dotenv = Dotenv\Dotenv::createImmutable(__DIR__ . '/../');
+            $dotenv->load();
+        } catch (Throwable $e) {
+            // Don't echo yet—capture for display later
+            $fatalError = 'Failed to load .env: ' . $e->getMessage();
+        }
+    }
+}
 
-use Dotenv\Dotenv;
-
-// Load the .env file
-$dotenv = Dotenv::createImmutable(__DIR__ . '/../');
-$dotenv->load();
-
-include 'header.php'; // Include header.php
-
-// Database connection settings
+// Database path
 $dbFilePath = __DIR__ . '/../database/plex_playlist.db';
 
-try {
-    // Create database connection
-    $conn = new PDO("sqlite:$dbFilePath");
-    // Set error mode to exceptions
-    $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-} catch (PDOException $e) {
-    die("Connection failed: " . $e->getMessage());
+// Helper to open a PDO connection (no echo!)
+function open_db(string $path): PDO {
+    $pdo = new PDO("sqlite:" . $path);
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    return $pdo;
 }
 
-// Process form submission
-if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['shows'])) {
-    $submittedShows = $_POST['shows'];
-    // Convert submitted show IDs to integer for security
-    $submittedShows = array_map('intval', $submittedShows);
+// Handle POST first (may redirect)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['shows'])) {
+    try {
+        $conn = open_db($dbFilePath);
 
-    // First, remove all shows from `playlistShows`
-    $sqlRemove = "DELETE FROM playlistShows";
-    $conn->exec($sqlRemove);
+        // Sanitize show IDs to integers
+        $submittedShows = array_map('intval', (array)$_POST['shows']);
 
-    // Then, insert checked shows into `playlistShows`
-    $sqlInsert = "INSERT INTO playlistShows (id, title, total_episodes, timeSlot)
-                  SELECT id, title, total_episodes, NULL FROM allShows WHERE id = ?";
-    $stmtInsert = $conn->prepare($sqlInsert);
-    foreach ($submittedShows as $showId) {
-        $stmtInsert->execute([$showId]);
+        // Reset playlistShows
+        $conn->exec("DELETE FROM playlistShows");
+
+        // Insert selected shows from allShows
+        $stmtInsert = $conn->prepare(
+            "INSERT INTO playlistShows (id, title, total_episodes, timeSlot)
+             SELECT id, title, total_episodes, NULL
+             FROM allShows
+             WHERE id = ?"
+        );
+
+        foreach ($submittedShows as $showId) {
+            $stmtInsert->execute([$showId]);
+        }
+
+        // Close and redirect
+        $conn = null;
+        header('Location: timeslots.php');
+        exit;
+
+    } catch (Throwable $e) {
+        // Capture error to render after header.php (no output yet)
+        $fatalError = 'Failed to save selection: ' . $e->getMessage();
     }
-
-    // Close the database connection before redirect
-    $conn = null;
-
-    // Redirect to timeslots.php
-    header('Location: timeslots.php');
-    exit(); // Ensure no further processing occurs
 }
 
-// Fetch all shows for listing
-$sqlAllShows = "SELECT id, title, total_episodes FROM allShows ORDER BY title ASC";
-$stmtAllShows = $conn->query($sqlAllShows);
-$shows = $stmtAllShows->fetchAll(PDO::FETCH_ASSOC);
-
-// Fetch existing shows from `playlistShows` for checkbox states
+// Not redirecting -> fetch data for the page
+$shows = [];
 $existingShowIds = [];
-$sqlExistingShows = "SELECT id FROM playlistShows";
-$stmtExistingShows = $conn->query($sqlExistingShows);
-while ($rowExistingShows = $stmtExistingShows->fetch(PDO::FETCH_ASSOC)) {
-    $existingShowIds[] = $rowExistingShows['id'];
+if ($fatalError === null) {
+    try {
+        $conn = open_db($dbFilePath);
+
+        // All shows
+        $stmtAll = $conn->query(
+            "SELECT id, title, total_episodes
+             FROM allShows
+             ORDER BY title ASC"
+        );
+        $shows = $stmtAll->fetchAll(PDO::FETCH_ASSOC);
+
+        // Existing playlist show IDs
+        $stmtExisting = $conn->query("SELECT id FROM playlistShows");
+        while ($row = $stmtExisting->fetch(PDO::FETCH_ASSOC)) {
+            $existingShowIds[] = (int)$row['id'];
+        }
+
+        $conn = null;
+    } catch (Throwable $e) {
+        $fatalError = 'Failed to load data: ' . $e->getMessage();
+    }
 }
 
-// Close the database connection
-$conn = null;
+// Safe to output now:
+require __DIR__ . '/header.php';
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>List of Shows</title>
+    <title>Select TV Shows</title>
     <style>
         .centered-container {
             display: flex;
@@ -102,10 +131,15 @@ $conn = null;
             text-align: center;
             max-width: 800px;
         }
+        .error {
+            color: #c00;
+            max-width: 800px;
+            text-align: left;
+            margin: 10px auto 20px;
+            white-space: pre-wrap;
+        }
         @media (max-width: 600px) {
-            .show-item {
-                flex: 1 1 100%;
-            }
+            .show-item { flex: 1 1 100%; }
         }
     </style>
 </head>
@@ -113,14 +147,25 @@ $conn = null;
     <div class="centered-container">
         <div class="explanation">
             <h2>Select TV Shows for Your Playlist</h2>
-            <p>Select the TV shows you want in your Plex playlist. Check the boxes next to the shows and click "Submit". You will then assign timeslots to each selected show on the next page.</p>
+            <p>Select the TV shows you want in your Plex playlist. Check the boxes next to the shows and click "Submit".
+               You will then assign timeslots to each selected show on the next page.</p>
         </div>
-        <form action="add_shows.php" method="post" class="form-container">
-            <?php foreach ($shows as $show): 
-                $isChecked = in_array($show['id'], $existingShowIds) ? 'checked' : ''; ?>
+
+        <?php if ($fatalError !== null): ?>
+            <div class="error"><?php echo htmlspecialchars($fatalError, ENT_QUOTES, 'UTF-8'); ?></div>
+        <?php endif; ?>
+
+        <form action="<?php echo htmlspecialchars($_SERVER['PHP_SELF'], ENT_QUOTES, 'UTF-8'); ?>" method="post" class="form-container">
+            <?php foreach ($shows as $show):
+                $id   = (int)$show['id'];
+                $isChecked = in_array($id, $existingShowIds, true) ? 'checked' : '';
+            ?>
                 <div class="show-item">
-                    <input type="checkbox" name="shows[]" value="<?= htmlspecialchars($show['id']) ?>" <?= $isChecked ?>>
-                    <?= htmlspecialchars($show['title']) ?> - Eps: <?= htmlspecialchars($show['total_episodes']) ?>
+                    <label>
+                        <input type="checkbox" name="shows[]" value="<?php echo $id; ?>" <?php echo $isChecked; ?>>
+                        <?php echo htmlspecialchars($show['title'], ENT_QUOTES, 'UTF-8'); ?>
+                        — Eps: <?php echo htmlspecialchars((string)$show['total_episodes'], ENT_QUOTES, 'UTF-8'); ?>
+                    </label>
                 </div>
             <?php endforeach; ?>
             <button type="submit" style="flex-basis: 100%;">Submit</button>
