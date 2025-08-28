@@ -5,20 +5,34 @@ generatePlaylist.py
 Usage:
   python generatePlaylist.py <playlist_ratingKey>
 
-Description:
+Purpose:
   Clears the specified Plex playlist and re-populates it in a round-robin order
-  based on entries in the SQLite database's playlistEpisodes table, grouped by timeSlot.
+  using episodes stored in SQLite (table: playlistEpisodes), grouped by timeSlot.
+
+Environment:
+  - .env in project root with:
+      PLEX_URL
+      PLEX_TOKEN
+      PLEX_VERIFY_SSL (optional; default "false")
 
 Requirements:
-  - .env in the project root containing PLEX_URL and PLEX_TOKEN
   - Tables populated by populateShows.py and getEpisodes.py
+
+Exit codes:
+  2 -> .env missing or PLEX_* missing
+  3 -> Plex connection failed
+  4 -> Playlist fetch failed or not a playlist
+  5 -> SQLite DB missing or cannot open
+  6 -> Failed to clear playlist
+  7 -> Failed to add items
+  0 -> Success
 """
 
 import os
 import sys
 import sqlite3
 import argparse
-from typing import Dict, List
+from typing import Dict, List, Iterable
 
 import requests
 from dotenv import load_dotenv
@@ -40,7 +54,6 @@ load_dotenv(ENV_PATH)
 
 PLEX_URL = os.getenv('PLEX_URL', '').strip()
 PLEX_TOKEN = os.getenv('PLEX_TOKEN', '').strip()
-# Optional toggle (default: false) for self-signed TLS like https://<ip>.plex.direct:32400
 PLEX_VERIFY_SSL = os.getenv('PLEX_VERIFY_SSL', 'false').strip().lower() in ('1', 'true', 'yes')
 
 if not PLEX_URL or not PLEX_TOKEN:
@@ -66,7 +79,7 @@ def round_robin(grouped: Dict[int, List[int]]) -> List[int]:
     if not grouped:
         return []
     keys = sorted(grouped.keys())
-    max_len = max(len(v) for v in grouped.values())
+    max_len = max(len(v) for v in grouped.values()) if grouped else 0
     order: List[int] = []
     for i in range(max_len):
         for k in keys:
@@ -75,12 +88,13 @@ def round_robin(grouped: Dict[int, List[int]]) -> List[int]:
                 order.append(lst[i])
     return order
 
-def chunked(iterable: List, size: int):
+def chunked(iterable: List, size: int) -> Iterable[List]:
+    """Yield lists of length <= size from iterable."""
     for i in range(0, len(iterable), size):
         yield iterable[i:i+size]
 
 # ---------------------------
-# Connect to Plex (use requests.Session for SSL verify control)
+# Connect to Plex (requests.Session controls SSL verify)
 # ---------------------------
 try:
     session = requests.Session()
