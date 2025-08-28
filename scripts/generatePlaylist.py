@@ -1,96 +1,195 @@
+#!/usr/bin/env python3
+"""
+generatePlaylist.py
+
+Usage:
+  python generatePlaylist.py <playlist_ratingKey>
+
+Description:
+  Clears the specified Plex playlist and re-populates it in a round-robin order
+  based on entries in the SQLite database's playlistEpisodes table, grouped by timeSlot.
+
+Requirements:
+  - .env in the project root containing PLEX_URL and PLEX_TOKEN
+  - Tables populated by populateShows.py and getEpisodes.py
+"""
+
+import os
+import sys
 import sqlite3
+import argparse
+from typing import Dict, List
+
+import requests
+from dotenv import load_dotenv
 from plexapi.server import PlexServer
 from plexapi.playlist import Playlist
-from dotenv import load_dotenv
-import os
-import argparse
 
-# Load environment variables from .env file
-load_dotenv()
+# ---------------------------
+# Paths & .env loading
+# ---------------------------
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+ENV_PATH = os.path.join(ROOT, '.env')
+DB_PATH = os.path.join(ROOT, 'database', 'plex_playlist.db')
 
-# Plex server connection details
-PLEX_URL = os.getenv('PLEX_URL')
-PLEX_TOKEN = os.getenv('PLEX_TOKEN')
+if not os.path.exists(ENV_PATH):
+    print(f"[ERROR] .env not found at {ENV_PATH}", file=sys.stderr)
+    sys.exit(2)
 
-# Set up argument parser
-parser = argparse.ArgumentParser(description="Manage Plex playlist.")
-parser.add_argument("ratingKey", type=int, help="The ratingKey of the playlist")
+load_dotenv(ENV_PATH)
+
+PLEX_URL = os.getenv('PLEX_URL', '').strip()
+PLEX_TOKEN = os.getenv('PLEX_TOKEN', '').strip()
+# Optional toggle (default: false) for self-signed TLS like https://<ip>.plex.direct:32400
+PLEX_VERIFY_SSL = os.getenv('PLEX_VERIFY_SSL', 'false').strip().lower() in ('1', 'true', 'yes')
+
+if not PLEX_URL or not PLEX_TOKEN:
+    print(f"[ERROR] Missing PLEX_URL or PLEX_TOKEN in {ENV_PATH}", file=sys.stderr)
+    sys.exit(2)
+
+# ---------------------------
+# Args
+# ---------------------------
+parser = argparse.ArgumentParser(description="Clear and repopulate a Plex playlist from DB.")
+parser.add_argument("ratingKey", type=int, help="The ratingKey (numeric id) of the target playlist")
 args = parser.parse_args()
+playlist_rating_key: int = args.ratingKey
 
-playlist_rating_key = args.ratingKey  # Get the ratingKey from command-line argument
+# ---------------------------
+# Helpers
+# ---------------------------
+def round_robin(grouped: Dict[int, List[int]]) -> List[int]:
+    """
+    Interleave lists by index to produce a round-robin order.
+    grouped = { timeSlot: [ratingKey, ...], ... }
+    """
+    if not grouped:
+        return []
+    keys = sorted(grouped.keys())
+    max_len = max(len(v) for v in grouped.values())
+    order: List[int] = []
+    for i in range(max_len):
+        for k in keys:
+            lst = grouped.get(k, [])
+            if i < len(lst):
+                order.append(lst[i])
+    return order
 
-# Connect to Plex server
-plex = PlexServer(PLEX_URL, PLEX_TOKEN)
+def chunked(iterable: List, size: int):
+    for i in range(0, len(iterable), size):
+        yield iterable[i:i+size]
 
-# Attempt to fetch the playlist directly by its ratingKey
+# ---------------------------
+# Connect to Plex (use requests.Session for SSL verify control)
+# ---------------------------
 try:
-    playlist = plex.fetchItem(playlist_rating_key)  # Passing as an integer
-    if isinstance(playlist, Playlist):
-        print(f"Found playlist: {playlist.title}. Clearing existing items.")
-        playlist.removeItems(playlist.items())
-    else:
-        print("Fetched item is not a playlist.")
-        exit(1)
+    session = requests.Session()
+    session.verify = True if PLEX_VERIFY_SSL else False
+    plex = PlexServer(PLEX_URL, PLEX_TOKEN, session=session)
 except Exception as e:
-    print(f"Error fetching the playlist by ratingKey: {e}")
-    exit(1)
+    print(f"[ERROR] Failed to connect to Plex at {PLEX_URL}: {e}", file=sys.stderr)
+    sys.exit(3)
 
-# Database connection details
-db_file = os.path.join(os.path.dirname(__file__), '../database/plex_playlist.db')
-
-# Connect to Database
+# ---------------------------
+# Fetch playlist by ratingKey
+# ---------------------------
 try:
-    db_conn = sqlite3.connect(db_file)
-    cursor = db_conn.cursor()
-    print("Successfully connected to the database.")
-except sqlite3.Error as e:
-    print(f"Error connecting to SQLite: {e}")
-    exit(1)
+    item = plex.fetchItem(playlist_rating_key)
+    if not isinstance(item, Playlist):
+        print("[ERROR] The fetched item is not a Playlist. Check the ratingKey.", file=sys.stderr)
+        sys.exit(4)
+    playlist: Playlist = item
+    print(f"[INFO] Target playlist: '{playlist.title}' (ratingKey={playlist_rating_key})")
+except Exception as e:
+    print(f"[ERROR] Could not fetch playlist with ratingKey {playlist_rating_key}: {e}", file=sys.stderr)
+    sys.exit(4)
 
-# Fetch episodes from the database with timeSlot
-query = """
-SELECT ratingKey, timeSlot FROM playlistEpisodes
-ORDER BY timeSlot, show_id, season, episode
-"""
-cursor.execute(query)
-episodes = cursor.fetchall()
+# ---------------------------
+# Connect to DB and read episodes
+# ---------------------------
+if not os.path.exists(DB_PATH):
+    print(f"[ERROR] Database not found at {DB_PATH}", file=sys.stderr)
+    sys.exit(5)
 
-# Group episodes by timeSlot
-episodes_by_timeSlot = {}
-for episode_key, timeSlot in episodes:
-    if timeSlot not in episodes_by_timeSlot:
-        episodes_by_timeSlot[timeSlot] = []
-    episodes_by_timeSlot[timeSlot].append(int(episode_key))  # Ensure ratingKey is an integer
+try:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+except Exception as e:
+    print(f"[ERROR] Could not open SQLite DB at {DB_PATH}: {e}", file=sys.stderr)
+    sys.exit(5)
 
-# Prepare episodes in round-robin order based on timeSlot
-items_order = []
-episode_count = {timeSlot: len(episodes) for timeSlot, episodes in episodes_by_timeSlot.items()}
-timeSlots = sorted(episodes_by_timeSlot.keys())  # Ensure a consistent order of timeSlots
+try:
+    query = """
+    SELECT ratingKey, timeSlot
+    FROM playlistEpisodes
+    ORDER BY timeSlot, show_id, season, episode
+    """
+    cur.execute(query)
+    rows = cur.fetchall()
+finally:
+    cur.close()
+    conn.close()
 
-# Continue round-robin until all episodes are added
-while any(episode_count[timeSlot] > 0 for timeSlot in timeSlots):
-    for timeSlot in timeSlots:
-        if episode_count[timeSlot] > 0:
-            items_order.append(episodes_by_timeSlot[timeSlot][len(episodes_by_timeSlot[timeSlot]) - episode_count[timeSlot]])
-            episode_count[timeSlot] -= 1
+if not rows:
+    print("[WARN] No episodes found in playlistEpisodes. Nothing to add.", file=sys.stderr)
+    rows = []
 
-# Fetch episodes in the order for playlist addition
+# Group by timeSlot
+episodes_by_slot: Dict[int, List[int]] = {}
+for rating_key, slot in rows:
+    try:
+        rk_int = int(rating_key)
+        episodes_by_slot.setdefault(int(slot), []).append(rk_int)
+    except Exception:
+        continue
+
+# Produce round-robin order
+episode_order: List[int] = round_robin(episodes_by_slot)
+print(f"[INFO] Episodes to add (count): {len(episode_order)}")
+
+# ---------------------------
+# Clear existing items
+# ---------------------------
+try:
+    current_items = playlist.items()
+    if current_items:
+        print(f"[INFO] Clearing existing playlist items: {len(current_items)}")
+        playlist.removeItems(current_items)
+    else:
+        print("[INFO] Playlist already empty.")
+except Exception as e:
+    print(f"[ERROR] Failed to clear existing playlist items: {e}", file=sys.stderr)
+    sys.exit(6)
+
+# ---------------------------
+# Fetch episodes & add in chunks
+# ---------------------------
+if not episode_order:
+    print("[INFO] No episodes to add. Leaving playlist empty.")
+    sys.exit(0)
+
 items_to_add = []
-for episode_key in items_order:
+failed_fetch = 0
+for rk in episode_order:
     try:
-        episode = plex.fetchItem(episode_key)
-        items_to_add.append(episode)
+        items_to_add.append(plex.fetchItem(rk))
     except Exception as e:
-        print(f"Error fetching episode with ratingKey {episode_key} from Plex: {e}")
+        failed_fetch += 1
+        print(f"[WARN] Could not fetch episode ratingKey={rk}: {e}", file=sys.stderr)
 
-# Add all episodes to the playlist in the new order
-if items_to_add:
-    try:
-        playlist.addItems(items_to_add)
-        print(f"Successfully added {len(items_to_add)} episodes in rotated order to playlist '{playlist.title}'.")
-    except Exception as e:
-        print(f"Error adding episodes to playlist: {e}")
+print(f"[INFO] Fetched {len(items_to_add)} items; {failed_fetch} failed.")
 
-# Close database connection
-cursor.close()
-db_conn.close()
+added_total = 0
+try:
+    for batch in chunked(items_to_add, 500):
+        if not batch:
+            continue
+        playlist.addItems(batch)
+        added_total += len(batch)
+        print(f"[INFO] Added {len(batch)} items (running total: {added_total})")
+except Exception as e:
+    print(f"[ERROR] Failed while adding items to playlist '{playlist.title}': {e}", file=sys.stderr)
+    sys.exit(7)
+
+print(f"[SUCCESS] Added {added_total} episodes to playlist '{playlist.title}'.")
+sys.exit(0)

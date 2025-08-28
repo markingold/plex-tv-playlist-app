@@ -1,0 +1,1002 @@
+===== START index.php =====
+<?php
+include 'public/header.php'; // Include the header file
+
+ob_start(); // Start output buffering
+
+// Check if the form was submitted
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    // Specify the path to the Python executable within the venv
+    $pythonExecutable = '/opt/plex_playlist_venv/bin/python3';
+    
+    // Handle Initialize Database button press
+    if (isset($_POST['initialize'])) {
+        // Specify the path to your populateShows.py script
+        $populateShowsScript = 'scripts/populateShows.py';
+        
+        // Run populateShows.py to initialize the database
+        $populateShowsCommand = escapeshellcmd("$pythonExecutable $populateShowsScript");
+        $populateShowsOutput = shell_exec($populateShowsCommand);
+
+        // Redirect to add_shows.php
+        header("Location: public/add_shows.php");
+        exit();
+    }
+}
+
+ob_end_flush(); // End output buffering and send output
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Plex TV Playlist App</title>
+    <style>
+        .container {
+            max-width: 800px;
+            margin: auto;
+            padding: 20px;
+            text-align: center;
+        }
+        .button-container {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Welcome to the Plex TV Playlist App</h1>
+        <p>
+            This application helps you generate round-robin playlists for your TV shows on Plex Media Server. 
+            You can select the shows, arrange them in your preferred order, and create a playlist that cycles 
+            through the first episode of each show, then the second episode of each show, and so on, until all episodes 
+            are added to the playlist.
+        </p>
+        <h2>How It Works</h2>
+        <p>
+            The app retrieves all your TV shows from the Plex server and stores them in a database. You can then 
+            select which shows you want in your playlist and assign them timeslots. The application will generate 
+            a playlist in Plex that plays episodes in the order you specified.
+        </p>
+        <h2>Getting Started</h2>
+        <p>
+            To get started, click the "Initialize Database" button below. This will set up the necessary database 
+            and prepare the app for use. After initialization, you will be redirected to select your shows and 
+            assign timeslots. This button is also used to update the TV Shows from your Plex Media Server.
+        </p>
+        <div class="button-container">
+            <form action="index.php" method="post">
+                <button type="submit" name="initialize">Initialize Database/Update TV Shows</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
+
+===== END index.php =====
+
+===== START public/add_shows.php =====
+<?php
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
+require '../vendor/autoload.php'; // Include the Composer autoload file
+
+use Dotenv\Dotenv;
+
+// Load the .env file
+$dotenv = Dotenv::createImmutable(__DIR__ . '/../');
+$dotenv->load();
+
+include 'header.php'; // Include header.php
+
+// Database connection settings
+$dbFilePath = __DIR__ . '/../database/plex_playlist.db';
+
+try {
+    // Create database connection
+    $conn = new PDO("sqlite:$dbFilePath");
+    // Set error mode to exceptions
+    $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+} catch (PDOException $e) {
+    die("Connection failed: " . $e->getMessage());
+}
+
+// Process form submission
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['shows'])) {
+    $submittedShows = $_POST['shows'];
+    // Convert submitted show IDs to integer for security
+    $submittedShows = array_map('intval', $submittedShows);
+
+    // First, remove all shows from `playlistShows`
+    $sqlRemove = "DELETE FROM playlistShows";
+    $conn->exec($sqlRemove);
+
+    // Then, insert checked shows into `playlistShows`
+    $sqlInsert = "INSERT INTO playlistShows (id, title, total_episodes, timeSlot)
+                  SELECT id, title, total_episodes, NULL FROM allShows WHERE id = ?";
+    $stmtInsert = $conn->prepare($sqlInsert);
+    foreach ($submittedShows as $showId) {
+        $stmtInsert->execute([$showId]);
+    }
+
+    // Close the database connection before redirect
+    $conn = null;
+
+    // Redirect to timeslots.php
+    header('Location: timeslots.php');
+    exit(); // Ensure no further processing occurs
+}
+
+// Fetch all shows for listing
+$sqlAllShows = "SELECT id, title, total_episodes FROM allShows ORDER BY title ASC";
+$stmtAllShows = $conn->query($sqlAllShows);
+$shows = $stmtAllShows->fetchAll(PDO::FETCH_ASSOC);
+
+// Fetch existing shows from `playlistShows` for checkbox states
+$existingShowIds = [];
+$sqlExistingShows = "SELECT id FROM playlistShows";
+$stmtExistingShows = $conn->query($sqlExistingShows);
+while ($rowExistingShows = $stmtExistingShows->fetch(PDO::FETCH_ASSOC)) {
+    $existingShowIds[] = $rowExistingShows['id'];
+}
+
+// Close the database connection
+$conn = null;
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>List of Shows</title>
+    <style>
+        .centered-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        .form-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            max-width: 1200px;
+            margin: auto;
+        }
+        .show-item {
+            flex: 1 1 45%;
+            margin: 5px;
+            box-sizing: border-box;
+            text-align: left;
+        }
+        button {
+            flex-basis: 100%;
+            margin: 10px 0;
+        }
+        .explanation {
+            margin-bottom: 20px;
+            text-align: center;
+            max-width: 800px;
+        }
+        @media (max-width: 600px) {
+            .show-item {
+                flex: 1 1 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="centered-container">
+        <div class="explanation">
+            <h2>Select TV Shows for Your Playlist</h2>
+            <p>Select the TV shows you want in your Plex playlist. Check the boxes next to the shows and click "Submit". You will then assign timeslots to each selected show on the next page.</p>
+        </div>
+        <form action="add_shows.php" method="post" class="form-container">
+            <?php foreach ($shows as $show): 
+                $isChecked = in_array($show['id'], $existingShowIds) ? 'checked' : ''; ?>
+                <div class="show-item">
+                    <input type="checkbox" name="shows[]" value="<?= htmlspecialchars($show['id']) ?>" <?= $isChecked ?>>
+                    <?= htmlspecialchars($show['title']) ?> - Eps: <?= htmlspecialchars($show['total_episodes']) ?>
+                </div>
+            <?php endforeach; ?>
+            <button type="submit" style="flex-basis: 100%;">Submit</button>
+        </form>
+    </div>
+</body>
+</html>
+
+===== END public/add_shows.php =====
+
+===== START public/header.php =====
+<?php
+// Define the base path and URL
+$base_path = '/plex_lite/public';
+$base_url = sprintf(
+    "%s://%s%s",
+    isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' ? 'https' : 'http',
+    $_SERVER['SERVER_NAME'],
+    $base_path
+);
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <title>Plex Toolbox</title>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #ffffff;
+        }
+        .navbar {
+            background-color: #0f0f0f;
+            background: linear-gradient(90deg, rgba(15, 15, 15, 1) 0%, rgba(0, 0, 0, 1) 100%);
+            border-bottom: 3px solid #e5a00d; /* Add orange border to the navbar */
+        }
+        .navbar-brand, .nav-link {
+            color: #ffffff !important;
+        }
+        .navbar-brand {
+            font-weight: bold;
+            font-size: 1.5em;
+        }
+        .nav-link {
+            transition: color 0.3s ease, text-shadow 0.3s ease;
+        }
+        .nav-link:hover {
+            color: #e5a00d !important;
+            text-shadow: 0 0 10px #e5a00d; /* Add glow effect on hover */
+        }
+        .nav-link.active {
+            color: #e5a00d !important; /* Highlight active link with orange */
+        }
+    </style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg navbar-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="<?= $base_path ?>/../index.php">Plex Toolbox</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNavDropdown" aria-controls="navbarNavDropdown" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNavDropdown">
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="<?= $base_path ?>/add_shows.php">Edit Shows</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="<?= $base_path ?>/timeslots.php">Timeslots</a>
+                </li>
+            </ul>
+        </div>
+    </div>
+</nav>
+
+<!-- Bootstrap Bundle with Popper -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+
+===== END public/header.php =====
+
+===== START public/timeslots.php =====
+<?php
+// ===== Timeslots & Playlist Generator =====
+
+// Composer is optional; keep if you use it elsewhere
+if (file_exists(__DIR__ . '/../vendor/autoload.php')) {
+    require __DIR__ . '/../vendor/autoload.php';
+    if (class_exists('\\Dotenv\\Dotenv')) {
+        $dotenv = Dotenv\Dotenv::createImmutable(__DIR__ . '/../');
+        $dotenv->load();
+    }
+}
+
+include 'header.php';
+
+// ---- Paths / Config ----
+$ROOT = realpath(__DIR__ . '/..');
+$dbFilePath = $ROOT . '/database/plex_playlist.db';
+
+// IMPORTANT: use your real venv path (absolute)
+$pythonExecutable = '/opt/plex_playlist_venv/bin/python3';
+
+// Scripts (absolute)
+$getEpisodesScript    = $ROOT . '/scripts/getEpisodes.py';
+$newPlaylistScript    = $ROOT . '/scripts/newPlaylist.py';
+$generatePlaylistScript = $ROOT . '/scripts/generatePlaylist.py';
+
+// Logs
+$logDir = $ROOT . '/logs';
+if (!is_dir($logDir)) {
+    @mkdir($logDir, 0775, true);
+}
+$timestamp = date('Ymd_His');
+$log_getEpisodes     = "$logDir/getEpisodes_$timestamp.log";
+$log_newPlaylist     = "$logDir/newPlaylist_$timestamp.log";
+$log_generatePlaylist = "$logDir/generatePlaylist_$timestamp.log";
+
+// ---- DB connect (to list shows & set timeslots) ----
+try {
+    $conn = new PDO("sqlite:$dbFilePath");
+    $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+} catch (PDOException $e) {
+    die("Connection failed: " . htmlspecialchars($e->getMessage()));
+}
+
+$shouldRedirect = false;
+$error = '';
+
+// On POST, update timeslots
+if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['timeslots'])) {
+    $timeslots = $_POST['timeslots'];
+    $uniqueTimeslots = array_unique($timeslots, SORT_REGULAR);
+
+    if (count($timeslots) !== count($uniqueTimeslots)) {
+        $error = "Each timeslot must be unique. Please ensure no duplicate timeslots are assigned.";
+    } else {
+        $shouldRedirect = true;
+        foreach ($timeslots as $showId => $timeslot) {
+            $sql = "UPDATE playlistShows SET timeSlot = ? WHERE id = ?";
+            $stmt = $conn->prepare($sql);
+            $stmt->execute([$timeslot, $showId]);
+        }
+    }
+}
+
+// Fetch shows for form
+$sql = "SELECT id, title, timeSlot, total_episodes FROM playlistShows ORDER BY total_episodes ASC";
+$stmt = $conn->query($sql);
+$shows = [];
+while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+    $shows[] = $row;
+}
+$numOfShows = count($shows);
+foreach ($shows as $index => $show) {
+    if (!$show['timeSlot']) {
+        $shows[$index]['timeSlot'] = $index + 1;
+    }
+}
+$conn = null;
+
+// ---- Helper: run a command with full logging ----
+function run_with_logging(string $cmd, string $cwd, string $logfile): array {
+    $descriptorspec = [
+        0 => ["pipe", "r"], // stdin
+        1 => ["pipe", "w"], // stdout
+        2 => ["pipe", "w"], // stderr
+    ];
+    $env = null;
+    $process = proc_open($cmd, $descriptorspec, $pipes, $cwd, $env);
+
+    $result = [
+        'exit_code' => -1,
+        'stdout' => '',
+        'stderr' => '',
+        'cmd' => $cmd,
+        'cwd' => $cwd,
+        'logfile' => $logfile,
+    ];
+
+    if (is_resource($process)) {
+        fclose($pipes[0]);
+        $stdout = stream_get_contents($pipes[1]); fclose($pipes[1]);
+        $stderr = stream_get_contents($pipes[2]); fclose($pipes[2]);
+        $exit = proc_close($process);
+
+        $result['stdout'] = $stdout;
+        $result['stderr'] = $stderr;
+        $result['exit_code'] = $exit;
+
+        // write log file
+        $contents  = "=== CMD ===\n$cmd\n\n=== CWD ===\n$cwd\n\n=== EXIT ===\n$exit\n\n=== STDOUT ===\n$stdout\n\n=== STDERR ===\n$stderr\n";
+        @file_put_contents($logfile, $contents);
+
+        return $result;
+    } else {
+        @file_put_contents($logfile, "Failed to start process: $cmd\n");
+        return $result;
+    }
+}
+
+// ---- If form validated, run the pipeline ----
+if ($shouldRedirect) {
+    // Ensure the absolute python path exists
+    if (!is_file($pythonExecutable)) {
+        $msg = "Python executable not found: $pythonExecutable\nFix this path in public/timeslots.php.";
+        @file_put_contents($log_newPlaylist, $msg);
+        echo nl2br(htmlspecialchars("ERROR: $msg"));
+        exit;
+    }
+
+    // 1) getEpisodes.py
+    $cmd1 = escapeshellarg($pythonExecutable) . ' ' . escapeshellarg($getEpisodesScript);
+    $r1 = run_with_logging($cmd1, $ROOT, $log_getEpisodes);
+    if ($r1['exit_code'] !== 0) {
+        echo "<pre style='color:#c00;'>getEpisodes.py failed (exit {$r1['exit_code']}). See log:\n{$r1['logfile']}\n\nSTDERR:\n" . htmlspecialchars($r1['stderr']) . "</pre>";
+        exit;
+    }
+
+    // 2) newPlaylist.py -> expect JSON: {"ok":true,"ratingKey":123,"title":"..."}
+    $cmd2 = escapeshellarg($pythonExecutable) . ' ' . escapeshellarg($newPlaylistScript);
+    $r2 = run_with_logging($cmd2, $ROOT, $log_newPlaylist);
+    if ($r2['exit_code'] !== 0) {
+        echo "<pre style='color:#c00;'>newPlaylist.py failed (exit {$r2['exit_code']}). See log:\n{$r2['logfile']}\n\nSTDERR:\n" . htmlspecialchars($r2['stderr']) . "</pre>";
+        exit;
+    }
+
+    $ratingKey = null;
+    $json = json_decode($r2['stdout'], true);
+    if (is_array($json) && !empty($json['ok']) && !empty($json['ratingKey'])) {
+        $ratingKey = (int)$json['ratingKey'];
+    }
+
+    if ($ratingKey) {
+        // 3) generatePlaylist.py <ratingKey>
+        $cmd3 = escapeshellarg($pythonExecutable) . ' ' . escapeshellarg($generatePlaylistScript) . ' ' . escapeshellarg((string)$ratingKey);
+        $r3 = run_with_logging($cmd3, $ROOT, $log_generatePlaylist);
+        if ($r3['exit_code'] !== 0) {
+            echo "<pre style='color:#c00;'>generatePlaylist.py failed (exit {$r3['exit_code']}). See log:\n{$r3['logfile']}\n\nSTDERR:\n" . htmlspecialchars($r3['stderr']) . "</pre>";
+            exit;
+        }
+
+        echo "<script>alert('Playlist Generated in Plex'); window.location.href = '../index.php';</script>";
+        exit;
+    } else {
+        echo "<pre style='color:#c00;'>Failed to create new playlist or retrieve its ratingKey.\nSee log for details:\n{$r2['logfile']}\n\nSTDOUT:\n" . htmlspecialchars($r2['stdout']) . "\n\nSTDERR:\n" . htmlspecialchars($r2['stderr']) . "</pre>";
+        exit;
+    }
+}
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Assign Timeslots</title>
+    <script>
+        function validateForm() {
+            const timeslots = document.querySelectorAll('select[name^="timeslots"]');
+            const selectedValues = [];
+            for (let i = 0; i < timeslots.length; i++) {
+                const value = timeslots[i].value;
+                if (selectedValues.includes(value)) {
+                    alert("Each timeslot must be unique. Please ensure no duplicate timeslots are assigned.");
+                    return false;
+                }
+                selectedValues.push(value);
+            }
+            return true;
+        }
+    </script>
+</head>
+<body>
+    <?php if ($error): ?>
+        <p style="color: red;"><?= htmlspecialchars($error) ?></p>
+    <?php endif; ?>
+
+    <form action="timeslots.php" method="post" onsubmit="return validateForm()">
+        <?php foreach ($shows as $index => $show): ?>
+            <div>
+                <span><?= htmlspecialchars($show['title']) ?> - Episodes: <?= htmlspecialchars($show['total_episodes']) ?>:</span>
+                <select name="timeslots[<?= (int)$show['id'] ?>]">
+                    <?php for ($i = 1; $i <= $numOfShows; $i++): ?>
+                        <option value="<?= $i ?>" <?= $i == $show['timeSlot'] ? 'selected' : '' ?>><?= $i ?></option>
+                    <?php endfor; ?>
+                </select>
+            </div>
+        <?php endforeach; ?>
+        <button type="submit">Generate Playlist</button>
+    </form>
+</body>
+</html>
+
+===== END public/timeslots.php =====
+
+===== START scripts/generatePlaylist.py =====
+#!/usr/bin/env python3
+"""
+generatePlaylist.py
+
+Usage:
+  python generatePlaylist.py <playlist_ratingKey>
+
+Description:
+  Clears the specified Plex playlist and re-populates it in a round-robin order
+  based on entries in the SQLite database's playlistEpisodes table, grouped by timeSlot.
+
+Requirements:
+  - .env in the project root containing PLEX_URL and PLEX_TOKEN
+  - Tables populated by populateShows.py and getEpisodes.py
+"""
+
+import os
+import sys
+import sqlite3
+import argparse
+from typing import Dict, List
+
+import requests
+from dotenv import load_dotenv
+from plexapi.server import PlexServer
+from plexapi.playlist import Playlist
+
+# ---------------------------
+# Paths & .env loading
+# ---------------------------
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+ENV_PATH = os.path.join(ROOT, '.env')
+DB_PATH = os.path.join(ROOT, 'database', 'plex_playlist.db')
+
+if not os.path.exists(ENV_PATH):
+    print(f"[ERROR] .env not found at {ENV_PATH}", file=sys.stderr)
+    sys.exit(2)
+
+load_dotenv(ENV_PATH)
+
+PLEX_URL = os.getenv('PLEX_URL', '').strip()
+PLEX_TOKEN = os.getenv('PLEX_TOKEN', '').strip()
+# Optional toggle (default: false) for self-signed TLS like https://<ip>.plex.direct:32400
+PLEX_VERIFY_SSL = os.getenv('PLEX_VERIFY_SSL', 'false').strip().lower() in ('1', 'true', 'yes')
+
+if not PLEX_URL or not PLEX_TOKEN:
+    print(f"[ERROR] Missing PLEX_URL or PLEX_TOKEN in {ENV_PATH}", file=sys.stderr)
+    sys.exit(2)
+
+# ---------------------------
+# Args
+# ---------------------------
+parser = argparse.ArgumentParser(description="Clear and repopulate a Plex playlist from DB.")
+parser.add_argument("ratingKey", type=int, help="The ratingKey (numeric id) of the target playlist")
+args = parser.parse_args()
+playlist_rating_key: int = args.ratingKey
+
+# ---------------------------
+# Helpers
+# ---------------------------
+def round_robin(grouped: Dict[int, List[int]]) -> List[int]:
+    """
+    Interleave lists by index to produce a round-robin order.
+    grouped = { timeSlot: [ratingKey, ...], ... }
+    """
+    if not grouped:
+        return []
+    keys = sorted(grouped.keys())
+    max_len = max(len(v) for v in grouped.values())
+    order: List[int] = []
+    for i in range(max_len):
+        for k in keys:
+            lst = grouped.get(k, [])
+            if i < len(lst):
+                order.append(lst[i])
+    return order
+
+def chunked(iterable: List, size: int):
+    for i in range(0, len(iterable), size):
+        yield iterable[i:i+size]
+
+# ---------------------------
+# Connect to Plex (use requests.Session for SSL verify control)
+# ---------------------------
+try:
+    session = requests.Session()
+    session.verify = True if PLEX_VERIFY_SSL else False
+    plex = PlexServer(PLEX_URL, PLEX_TOKEN, session=session)
+except Exception as e:
+    print(f"[ERROR] Failed to connect to Plex at {PLEX_URL}: {e}", file=sys.stderr)
+    sys.exit(3)
+
+# ---------------------------
+# Fetch playlist by ratingKey
+# ---------------------------
+try:
+    item = plex.fetchItem(playlist_rating_key)
+    if not isinstance(item, Playlist):
+        print("[ERROR] The fetched item is not a Playlist. Check the ratingKey.", file=sys.stderr)
+        sys.exit(4)
+    playlist: Playlist = item
+    print(f"[INFO] Target playlist: '{playlist.title}' (ratingKey={playlist_rating_key})")
+except Exception as e:
+    print(f"[ERROR] Could not fetch playlist with ratingKey {playlist_rating_key}: {e}", file=sys.stderr)
+    sys.exit(4)
+
+# ---------------------------
+# Connect to DB and read episodes
+# ---------------------------
+if not os.path.exists(DB_PATH):
+    print(f"[ERROR] Database not found at {DB_PATH}", file=sys.stderr)
+    sys.exit(5)
+
+try:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+except Exception as e:
+    print(f"[ERROR] Could not open SQLite DB at {DB_PATH}: {e}", file=sys.stderr)
+    sys.exit(5)
+
+try:
+    query = """
+    SELECT ratingKey, timeSlot
+    FROM playlistEpisodes
+    ORDER BY timeSlot, show_id, season, episode
+    """
+    cur.execute(query)
+    rows = cur.fetchall()
+finally:
+    cur.close()
+    conn.close()
+
+if not rows:
+    print("[WARN] No episodes found in playlistEpisodes. Nothing to add.", file=sys.stderr)
+    rows = []
+
+# Group by timeSlot
+episodes_by_slot: Dict[int, List[int]] = {}
+for rating_key, slot in rows:
+    try:
+        rk_int = int(rating_key)
+        episodes_by_slot.setdefault(int(slot), []).append(rk_int)
+    except Exception:
+        continue
+
+# Produce round-robin order
+episode_order: List[int] = round_robin(episodes_by_slot)
+print(f"[INFO] Episodes to add (count): {len(episode_order)}")
+
+# ---------------------------
+# Clear existing items
+# ---------------------------
+try:
+    current_items = playlist.items()
+    if current_items:
+        print(f"[INFO] Clearing existing playlist items: {len(current_items)}")
+        playlist.removeItems(current_items)
+    else:
+        print("[INFO] Playlist already empty.")
+except Exception as e:
+    print(f"[ERROR] Failed to clear existing playlist items: {e}", file=sys.stderr)
+    sys.exit(6)
+
+# ---------------------------
+# Fetch episodes & add in chunks
+# ---------------------------
+if not episode_order:
+    print("[INFO] No episodes to add. Leaving playlist empty.")
+    sys.exit(0)
+
+items_to_add = []
+failed_fetch = 0
+for rk in episode_order:
+    try:
+        items_to_add.append(plex.fetchItem(rk))
+    except Exception as e:
+        failed_fetch += 1
+        print(f"[WARN] Could not fetch episode ratingKey={rk}: {e}", file=sys.stderr)
+
+print(f"[INFO] Fetched {len(items_to_add)} items; {failed_fetch} failed.")
+
+added_total = 0
+try:
+    for batch in chunked(items_to_add, 500):
+        if not batch:
+            continue
+        playlist.addItems(batch)
+        added_total += len(batch)
+        print(f"[INFO] Added {len(batch)} items (running total: {added_total})")
+except Exception as e:
+    print(f"[ERROR] Failed while adding items to playlist '{playlist.title}': {e}", file=sys.stderr)
+    sys.exit(7)
+
+print(f"[SUCCESS] Added {added_total} episodes to playlist '{playlist.title}'.")
+sys.exit(0)
+
+===== END scripts/generatePlaylist.py =====
+
+===== START scripts/getEpisodes.py =====
+from plexapi.server import PlexServer
+import sqlite3
+import math  # For rounding up the duration
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+load_dotenv(os.path.join(ROOT, '.env'))
+
+PLEX_URL = os.getenv('PLEX_URL')
+PLEX_TOKEN = os.getenv('PLEX_TOKEN')
+db_file = os.path.join(os.path.dirname(__file__), '../database/plex_playlist.db')
+
+# Connect to Plex Server
+plex = PlexServer(PLEX_URL, PLEX_TOKEN)
+print("Connected to Plex Server.")
+
+# Connect to Database
+try:
+    db_conn = sqlite3.connect(db_file)
+    cursor = db_conn.cursor()
+    print("Successfully connected to the database.")
+    
+    # Clear the playlistEpisodes table before starting
+    cursor.execute("DELETE FROM playlistEpisodes")
+    db_conn.commit()
+    print("Cleared the playlistEpisodes table.")
+    
+except sqlite3.Error as e:
+    print(f"Error connecting to SQLite: {e}")
+    exit(1)
+
+# Fetch shows from the database
+cursor.execute("SELECT id, title, timeSlot FROM playlistShows")
+shows_from_db = cursor.fetchall()
+print(f"Retrieved {len(shows_from_db)} shows from database.")
+
+# Find the TV Shows section
+tv_shows_section = None
+for section in plex.library.sections():
+    if section.title == 'TV Shows':
+        tv_shows_section = section
+        break
+
+if not tv_shows_section:
+    print("TV Shows section not found.")
+    exit(1)
+
+print(f"Library sections found: {[section.title for section in plex.library.sections()]}")
+print(f"Processing shows from section: {tv_shows_section.title}")
+
+# Iterate over Plex shows and database shows to find matches
+matched_shows = 0
+total_episodes_processed = 0
+for show in tv_shows_section.all():
+    for db_show in shows_from_db:
+        db_show_id, db_show_title, db_show_timeSlot = db_show
+        if show.title == db_show_title:
+            print(f"Match found for show: {show.title}")
+            matched_shows += 1
+            # Found a match, now iterate over episodes
+            for episode in show.episodes():
+                try:
+                    # Convert duration from milliseconds to minutes, rounded up
+                    duration_minutes = math.ceil(episode.duration / 60000)
+                    
+                    insert_stmt = ("INSERT INTO playlistEpisodes "
+                                   "(ratingKey, season, episode, releaseDate, duration, summary, "
+                                   "watchedStatus, title, episodeTitle, show_id, timeSlot) "
+                                   "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                    data = (episode.ratingKey, episode.parentIndex, episode.index, episode.originallyAvailableAt,
+                            duration_minutes, episode.summary, episode.viewCount > 0,
+                            episode.grandparentTitle, episode.title, db_show_id, db_show_timeSlot)
+                    
+                    cursor.execute(insert_stmt, data)
+                    db_conn.commit()
+                    total_episodes_processed += 1
+                    print(f"Inserted episode: {episode.title} with duration {duration_minutes} minutes")
+                except sqlite3.Error as e:
+                    print(f"Failed to insert episode data for {episode.title}: {e}")
+
+print(f"Database update complete. {matched_shows} shows matched. {total_episodes_processed} episodes processed.")
+
+# Close connections
+cursor.close()
+db_conn.close()
+
+===== END scripts/getEpisodes.py =====
+
+===== START scripts/newPlaylist.py =====
+#!/usr/bin/env python3
+"""
+newPlaylist.py
+Creates a new (initially empty) Plex playlist and prints JSON:
+  {"ok": true, "ratingKey": 12345, "title": "TV Playlist 2025-08-27 13:45:02"}
+
+Notes:
+- Plex requires items at creation time. We seed with one episode, then clear it.
+- generatePlaylist.py will fill the playlist properly afterward.
+"""
+
+import os
+import sys
+import json
+import sqlite3
+from datetime import datetime
+from typing import Optional
+
+import requests
+from dotenv import load_dotenv
+from plexapi.server import PlexServer
+
+# ----------------------
+# Paths & environment
+# ----------------------
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+ENV_PATH = os.path.join(ROOT, '.env')
+DB_PATH = os.path.join(ROOT, 'database', 'plex_playlist.db')
+
+def jerr(msg: str, code: int) -> None:
+    print(json.dumps({"ok": False, "error": msg}))
+    sys.exit(code)
+
+if not os.path.exists(ENV_PATH):
+    jerr(f".env not found at {ENV_PATH}", 2)
+
+load_dotenv(ENV_PATH)
+
+PLEX_URL = os.getenv('PLEX_URL', '').strip()
+PLEX_TOKEN = os.getenv('PLEX_TOKEN', '').strip()
+# If you use https://<ip>.plex.direct:32400 with self-signed TLS, set PLEX_VERIFY_SSL=false in .env
+PLEX_VERIFY_SSL = os.getenv('PLEX_VERIFY_SSL', 'false').strip().lower() in ('1', 'true', 'yes')
+
+if not PLEX_URL or not PLEX_TOKEN:
+    jerr("Missing PLEX_URL or PLEX_TOKEN", 2)
+
+# ----------------------
+# Connect to Plex (no CONFIG; use a requests.Session instead)
+# ----------------------
+try:
+    session = requests.Session()
+    session.verify = True if PLEX_VERIFY_SSL else False  # disable verification for plex.direct/self-signed
+    plex = PlexServer(PLEX_URL, PLEX_TOKEN, session=session)
+except Exception as e:
+    jerr(f"Plex connect failed: {e}", 3)
+
+# ----------------------
+# Get a seed episode
+# ----------------------
+seed_key: Optional[int] = None
+
+if not os.path.exists(DB_PATH):
+    jerr(f"DB not found at {DB_PATH}", 4)
+
+try:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT ratingKey
+        FROM playlistEpisodes
+        ORDER BY timeSlot, show_id, season, episode
+        LIMIT 1
+    """)
+    row = cur.fetchone()
+    seed_key = int(row[0]) if row else None
+except Exception as e:
+    jerr(f"DB query failed: {e}", 4)
+finally:
+    try:
+        cur.close()
+        conn.close()
+    except Exception:
+        pass
+
+# Fallback: ask Plex for any episode if DB is empty
+if seed_key is None:
+    try:
+        eps = plex.library.search(libtype='episode')
+        if eps:
+            try:
+                seed_key = int(eps[0].ratingKey)
+            except Exception:
+                seed_key = None
+    except Exception:
+        seed_key = None
+
+if seed_key is None:
+    jerr("No episode found to seed playlist creation.", 5)
+
+# ----------------------
+# Create the playlist
+# ----------------------
+now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+playlist_name = f"TV Playlist {now}"
+
+try:
+    seed_item = plex.fetchItem(seed_key)
+except Exception as e:
+    jerr(f"Failed to fetch seed item {seed_key}: {e}", 6)
+
+try:
+    pl = plex.createPlaylist(title=playlist_name, items=[seed_item])
+
+    # Clear seed so it's empty for the real fill step later
+    try:
+        items = pl.items()
+        if items:
+            pl.removeItems(items)
+    except Exception:
+        # Not fatal — playlist is created already
+        pass
+
+    print(json.dumps({"ok": True, "ratingKey": int(pl.ratingKey), "title": pl.title}))
+    sys.exit(0)
+except Exception as e:
+    jerr(f"Playlist creation failed: {e}", 7)
+
+===== END scripts/newPlaylist.py =====
+
+===== START scripts/populateShows.py =====
+#!/usr/bin/env python3
+import os
+import sqlite3
+from dotenv import load_dotenv
+from plexapi.server import PlexServer
+
+# ---- Paths & env loading (works regardless of CWD) ----
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+ENV_PATH = os.path.join(ROOT, '.env')
+load_dotenv(ENV_PATH)
+
+PLEX_URL = os.getenv('PLEX_URL')
+PLEX_TOKEN = os.getenv('PLEX_TOKEN')
+
+# ---- DB setup ----
+db_directory = os.path.join(ROOT, 'database')
+os.makedirs(db_directory, exist_ok=True)  # tolerate if exists
+db_file = os.path.join(db_directory, 'plex_playlist.db')
+
+create_tables_sql = '''
+CREATE TABLE IF NOT EXISTS allShows (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    total_episodes INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS playlistShows (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    total_episodes INTEGER DEFAULT 0,
+    timeSlot INTEGER
+);
+CREATE TABLE IF NOT EXISTS playlistEpisodes (
+    ratingKey INTEGER PRIMARY KEY,
+    season INTEGER,
+    episode INTEGER,
+    releaseDate TEXT,
+    duration INTEGER,
+    summary TEXT,
+    watchedStatus BOOLEAN,
+    title TEXT,
+    episodeTitle TEXT,
+    show_id INTEGER,
+    timeSlot INTEGER
+);
+'''
+
+with sqlite3.connect(db_file) as conn:
+    conn.executescript(create_tables_sql)
+    conn.commit()
+
+# ---- Connect to Plex AFTER DB is ready ----
+if not PLEX_URL or not PLEX_TOKEN:
+    raise RuntimeError(f"Missing PLEX_URL or PLEX_TOKEN. Checked: {ENV_PATH}")
+
+plex = PlexServer(PLEX_URL, PLEX_TOKEN)
+print("Connected to Plex Server.")
+
+# ---- Populate shows (fast count using leafCount, fallback if needed) ----
+shows = plex.library.search(libtype='show')
+with sqlite3.connect(db_file) as conn:
+    cur = conn.cursor()
+    for show in shows:
+        try:
+            total = getattr(show, 'leafCount', None)
+            if total is None:
+                total = len(show.episodes())
+            cur.execute(
+                "INSERT OR REPLACE INTO allShows (id, title, total_episodes) VALUES (?, ?, ?)",
+                (int(show.ratingKey), show.title, int(total or 0))
+            )
+        except Exception as e:
+            print(f"Skip {getattr(show,'title','<unknown>')}: {e}")
+    conn.commit()
+
+print("Database update complete.")
+
+===== END scripts/populateShows.py =====
+
