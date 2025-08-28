@@ -1,36 +1,34 @@
-from plexapi.server import PlexServer
-from dotenv import load_dotenv
-import sqlite3
+#!/usr/bin/env python3
 import os
+import sqlite3
+from dotenv import load_dotenv
+from plexapi.server import PlexServer
 
-# Load environment variables from .env file
-load_dotenv()
+# ---- Paths & env loading (works regardless of CWD) ----
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+ENV_PATH = os.path.join(ROOT, '.env')
+load_dotenv(ENV_PATH)
 
 PLEX_URL = os.getenv('PLEX_URL')
 PLEX_TOKEN = os.getenv('PLEX_TOKEN')
 
-# Create the database directory if it doesn't exist
-db_directory = os.path.join(os.path.dirname(__file__), '../database')
-if not os.path.exists(db_directory):
-    os.makedirs(db_directory)
-
+# ---- DB setup ----
+db_directory = os.path.join(ROOT, 'database')
+os.makedirs(db_directory, exist_ok=True)  # tolerate if exists
 db_file = os.path.join(db_directory, 'plex_playlist.db')
 
-# SQL for creating tables
 create_tables_sql = '''
 CREATE TABLE IF NOT EXISTS allShows (
     id INTEGER PRIMARY KEY,
     title TEXT NOT NULL,
     total_episodes INTEGER DEFAULT 0
 );
-
 CREATE TABLE IF NOT EXISTS playlistShows (
     id INTEGER PRIMARY KEY,
     title TEXT NOT NULL,
     total_episodes INTEGER DEFAULT 0,
     timeSlot INTEGER
 );
-
 CREATE TABLE IF NOT EXISTS playlistEpisodes (
     ratingKey INTEGER PRIMARY KEY,
     season INTEGER,
@@ -46,44 +44,32 @@ CREATE TABLE IF NOT EXISTS playlistEpisodes (
 );
 '''
 
-# Connect to Plex Server
+with sqlite3.connect(db_file) as conn:
+    conn.executescript(create_tables_sql)
+    conn.commit()
+
+# ---- Connect to Plex AFTER DB is ready ----
+if not PLEX_URL or not PLEX_TOKEN:
+    raise RuntimeError(f"Missing PLEX_URL or PLEX_TOKEN. Checked: {ENV_PATH}")
+
 plex = PlexServer(PLEX_URL, PLEX_TOKEN)
 print("Connected to Plex Server.")
 
-# Connect to SQLite Database
-try:
-    db_conn = sqlite3.connect(db_file)
-    cursor = db_conn.cursor()
-    print("Successfully connected to the database.")
-    
-    # Create tables if they do not exist
-    cursor.executescript(create_tables_sql)
-    db_conn.commit()
-    print("Created tables in the database.")
-
-except sqlite3.Error as e:
-    print(f"Error connecting to SQLite: {e}")
-    exit(1)
-
-# Fetch all TV shows from Plex
+# ---- Populate shows (fast count using leafCount, fallback if needed) ----
 shows = plex.library.search(libtype='show')
-print(f"Found {len(shows)} TV shows in the entire library.")
-
-# Iterate over Plex shows and insert into the database
-for show in shows:
-    try:
-        total_episodes = len(show.episodes())
-        cursor.execute("INSERT INTO allShows (id, title, total_episodes) VALUES (?, ?, ?)",
-                       (show.ratingKey, show.title, total_episodes))
-        db_conn.commit()
-        print(f"Inserted show: {show.title} with {total_episodes} episodes.")
-    except sqlite3.IntegrityError:
-        print(f"Show already exists in the database: {show.title}")
-    except sqlite3.Error as e:
-        print(f"Failed to insert show data for {show.title}: {e}")
+with sqlite3.connect(db_file) as conn:
+    cur = conn.cursor()
+    for show in shows:
+        try:
+            total = getattr(show, 'leafCount', None)
+            if total is None:
+                total = len(show.episodes())
+            cur.execute(
+                "INSERT OR REPLACE INTO allShows (id, title, total_episodes) VALUES (?, ?, ?)",
+                (int(show.ratingKey), show.title, int(total or 0))
+            )
+        except Exception as e:
+            print(f"Skip {getattr(show,'title','<unknown>')}: {e}")
+    conn.commit()
 
 print("Database update complete.")
-
-# Close connections
-cursor.close()
-db_conn.close()
