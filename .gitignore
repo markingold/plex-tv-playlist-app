@@ -20,4 +20,11 @@ database/*.db
 logs/
 
 # Ignore .env
-.env
+.env.env
+database/
+logs/
+vendor/
+app_snapshot_*.txt
+composer.lock
+composer.json
+node_modules/
