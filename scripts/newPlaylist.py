@@ -1,12 +1,32 @@
 #!/usr/bin/env python3
 """
 newPlaylist.py
-Creates a new (initially empty) Plex playlist and prints JSON:
-  {"ok": true, "ratingKey": 12345, "title": "TV Playlist 2025-08-27 13:45:02"}
+
+Usage:
+  python newPlaylist.py
+
+Purpose:
+  Creates a new (initially empty) Plex playlist and prints JSON:
+    {"ok": true, "ratingKey": 12345, "title": "TV Playlist 2025-08-27 13:45:02"}
 
 Notes:
-- Plex requires items at creation time. We seed with one episode, then clear it.
-- generatePlaylist.py will fill the playlist properly afterward.
+  - Plex requires items at creation time. We seed with one episode, then clear it.
+  - generatePlaylist.py will fill the playlist afterward.
+
+Environment:
+  - .env in project root with:
+      PLEX_URL
+      PLEX_TOKEN
+      PLEX_VERIFY_SSL (optional; default "false")
+
+Exit codes:
+  2 -> .env missing or PLEX_* missing
+  3 -> Plex connection failed
+  4 -> DB missing / query failed
+  5 -> No seed episode found
+  6 -> Couldn’t fetch seed item
+  7 -> Playlist creation failed
+  0 -> Success
 """
 
 import os
@@ -28,6 +48,7 @@ ENV_PATH = os.path.join(ROOT, '.env')
 DB_PATH = os.path.join(ROOT, 'database', 'plex_playlist.db')
 
 def jerr(msg: str, code: int) -> None:
+    """Print a JSON error and exit with code."""
     print(json.dumps({"ok": False, "error": msg}))
     sys.exit(code)
 
@@ -38,14 +59,13 @@ load_dotenv(ENV_PATH)
 
 PLEX_URL = os.getenv('PLEX_URL', '').strip()
 PLEX_TOKEN = os.getenv('PLEX_TOKEN', '').strip()
-# If you use https://<ip>.plex.direct:32400 with self-signed TLS, set PLEX_VERIFY_SSL=false in .env
 PLEX_VERIFY_SSL = os.getenv('PLEX_VERIFY_SSL', 'false').strip().lower() in ('1', 'true', 'yes')
 
 if not PLEX_URL or not PLEX_TOKEN:
     jerr("Missing PLEX_URL or PLEX_TOKEN", 2)
 
 # ----------------------
-# Connect to Plex (no CONFIG; use a requests.Session instead)
+# Connect to Plex
 # ----------------------
 try:
     session = requests.Session()
