@@ -1,6 +1,6 @@
 <?php
 // public/partials/nav.php
-$base_path = '/plex_lite/public';
+$base_path = '/public';
 ?>
 <body>
 <nav class="navbar navbar-expand-lg navbar-dark">

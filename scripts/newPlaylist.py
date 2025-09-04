@@ -39,6 +39,7 @@ from typing import Optional
 import requests
 from dotenv import load_dotenv
 from plexapi.server import PlexServer
+from urllib.parse import urlparse, urlunparse
 
 # ----------------------
 # Paths & environment
@@ -55,7 +56,7 @@ def jerr(msg: str, code: int) -> None:
 if not os.path.exists(ENV_PATH):
     jerr(f".env not found at {ENV_PATH}", 2)
 
-load_dotenv(ENV_PATH)
+load_dotenv(ENV_PATH, override=True)
 
 PLEX_URL = os.getenv('PLEX_URL', '').strip()
 PLEX_TOKEN = os.getenv('PLEX_TOKEN', '').strip()
@@ -64,12 +65,29 @@ PLEX_VERIFY_SSL = os.getenv('PLEX_VERIFY_SSL', 'false').strip().lower() in ('1',
 if not PLEX_URL or not PLEX_TOKEN:
     jerr("Missing PLEX_URL or PLEX_TOKEN", 2)
 
+def remap_localhost_for_container(url: str) -> str:
+    """If URL is localhost/127.0.0.1, map to host.docker.internal (useful when Plex runs on the host)."""
+    try:
+        u = urlparse(url or '')
+        host = (u.hostname or '').lower()
+        if host in ('localhost', '127.0.0.1'):
+            scheme = (u.scheme or 'http')
+            port = u.port or (443 if scheme == 'https' else 32400)
+            netloc = f"host.docker.internal:{port}"
+            return urlunparse((scheme, netloc, u.path or '', u.params or '', u.query or '', u.fragment or ''))
+    except Exception:
+        pass
+    return url
+
+# Remap if needed
+PLEX_URL = remap_localhost_for_container(PLEX_URL)
+
 # ----------------------
 # Connect to Plex
 # ----------------------
 try:
     session = requests.Session()
-    session.verify = True if PLEX_VERIFY_SSL else False  # disable verification for plex.direct/self-signed
+    session.verify = True if PLEX_VERIFY_SSL else False  # disable verification for plex.direct/self-signed if false
     plex = PlexServer(PLEX_URL, PLEX_TOKEN, session=session)
 except Exception as e:
     jerr(f"Plex connect failed: {e}", 3)

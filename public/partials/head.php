@@ -9,6 +9,15 @@
   <title>Plex Toolbox</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
+    body { background-color: #1a1a1a; color: #fff; }
+    .card { background:#111; border:1px solid #2a2a2a; }
+    .card-title { color:#ffc74a; }
+    /* Make the auth link readable on dark bg */
+    #plex-auth-link.btn { border-color:#ffc74a; color:#ffc74a; }
+    #plex-auth-link.btn:hover { background:#ffc74a; color:#111; }
+  </style>
+
+  <style>
     body { background-color: #1a1a1a; color: #ffffff; }
     .navbar {
       background-color: #0f0f0f;

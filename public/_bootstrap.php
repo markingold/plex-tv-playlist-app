@@ -2,14 +2,9 @@
 // public/_bootstrap.php
 // Central helpers for paths and Python execution
 
-// Absolute project root (repo root)
 $ROOT = realpath(__DIR__ . '/..');
+$PY = getenv('PYTHON_EXEC') ?: '/usr/local/bin/python3';
 
-// Python executable: prefer env, then default
-$PY = getenv('PYTHON_EXEC') ?: '/opt/plex_playlist_venv/bin/python3';
-
-// Run a Python script from /scripts with optional args.
-// Returns array [exit_code, stdout, stderr]
 function run_py_logged(string $script, array $args = [], string $logfile = null): array {
     global $ROOT, $PY;
 
@@ -34,8 +29,8 @@ function run_py_logged(string $script, array $args = [], string $logfile = null)
         $exit = proc_close($process);
 
         $result['exit_code'] = $exit;
-        $result['stdout'] = $stdout;
-        $result['stderr'] = $stderr;
+        $result['stdout']    = $stdout;
+        $result['stderr']    = $stderr;
 
         if ($logfile) {
             @file_put_contents($logfile,
@@ -46,8 +41,7 @@ function run_py_logged(string $script, array $args = [], string $logfile = null)
     return $result;
 }
 
-// Convenience wrapper (no logging) that returns stdout or null on failure
 function run_py_stdout(string $script, array $args = []): ?string {
     $r = run_py_logged($script, $args);
-    return $r['exit_code'] === 0 ? $r['stdout'] : null;
+    return ($r['exit_code'] === 0) ? $r['stdout'] : null;
 }

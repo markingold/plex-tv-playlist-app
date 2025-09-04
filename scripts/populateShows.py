@@ -37,7 +37,7 @@ DB_PATH = DB_DIR / "plex_playlist.db"
 # Load .env if present (don't crash if missing/unreadable)
 try:
     if ENV_PATH.exists():
-        loaded = load_dotenv(ENV_PATH)
+        loaded = load_dotenv(ENV_PATH, override=True)
         if not loaded:
             print(f"Warning: .env not loaded from {ENV_PATH}. Using environment variables only.", file=sys.stderr)
     else:
@@ -64,6 +64,23 @@ try:
     os.chown(DB_DIR, uid, gid)
 except Exception:
     uid = gid = None  # may not exist in some containers
+
+from urllib.parse import urlparse, urlunparse
+
+def remap_localhost_for_container(url: str) -> str:
+    try:
+        u = urlparse(url or '')
+        host = (u.hostname or '').lower()
+        if host in ('localhost', '127.0.0.1'):
+            port = u.port or (443 if u.scheme == 'https' else 32400)
+            netloc = f"host.docker.internal:{port}"
+            return urlunparse((u.scheme or 'http', netloc, u.path or '', u.params or '', u.query or '', u.fragment or ''))
+    except Exception:
+        pass
+    return url
+
+# >>> FIX: remap the actual PLEX_URL variable <<<
+PLEX_URL = remap_localhost_for_container(PLEX_URL)
 
 # ----- Init database -----
 create_tables_sql = """

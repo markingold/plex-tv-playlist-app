@@ -33,6 +33,7 @@ import sys
 import sqlite3
 import argparse
 from typing import Dict, List, Iterable
+from urllib.parse import urlparse, urlunparse
 
 import requests
 from dotenv import load_dotenv
@@ -50,7 +51,7 @@ if not os.path.exists(ENV_PATH):
     print(f"[ERROR] .env not found at {ENV_PATH}", file=sys.stderr)
     sys.exit(2)
 
-load_dotenv(ENV_PATH)
+load_dotenv(ENV_PATH, override=True)
 
 PLEX_URL = os.getenv('PLEX_URL', '').strip()
 PLEX_TOKEN = os.getenv('PLEX_TOKEN', '').strip()
@@ -59,6 +60,23 @@ PLEX_VERIFY_SSL = os.getenv('PLEX_VERIFY_SSL', 'false').strip().lower() in ('1',
 if not PLEX_URL or not PLEX_TOKEN:
     print(f"[ERROR] Missing PLEX_URL or PLEX_TOKEN in {ENV_PATH}", file=sys.stderr)
     sys.exit(2)
+
+def remap_localhost_for_container(url: str) -> str:
+    """Map localhost/127.0.0.1 to host.docker.internal for container -> host access."""
+    try:
+        u = urlparse(url or '')
+        host = (u.hostname or '').lower()
+        if host in ('localhost', '127.0.0.1'):
+            scheme = (u.scheme or 'http')
+            port = u.port or (443 if scheme == 'https' else 32400)
+            netloc = f"host.docker.internal:{port}"
+            return urlunparse((scheme, netloc, u.path or '', u.params or '', u.query or '', u.fragment or ''))
+    except Exception:
+        pass
+    return url
+
+# Remap if needed
+PLEX_URL = remap_localhost_for_container(PLEX_URL)
 
 # ---------------------------
 # Args
