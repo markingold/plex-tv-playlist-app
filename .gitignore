@@ -28,3 +28,4 @@ app_snapshot_*.txt
 composer.lock
 composer.json
 node_modules/
+.env
