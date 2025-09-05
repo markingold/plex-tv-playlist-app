@@ -30,3 +30,6 @@ composer.json
 node_modules/
 .env
 make_text.sh
+# Local helper scripts (not for repo)
+run.sh
+make_text.sh
