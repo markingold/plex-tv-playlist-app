@@ -1,247 +1,266 @@
-# Plex TV Playlist (Round‑Robin) — Dockerized Web App
+# 📺 Plex TV Playlist App — Round‑Robin TV Scheduler for Plex
 
-Create a **round‑robin TV playlist** on your Plex Media Server: pick shows, assign unique time slots, and the app builds a playlist that cycles Ep1 of each show, then Ep2, and so on. Everything ships in a single Docker service with PHP (UI) + Python (Plex logic) baked in.
+Create a **round‑robin TV playlist** on your Plex Media Server: pick shows, assign unique time slots, and the app builds a playlist that cycles Ep1 of each show, then Ep2, and so on — like live TV.
 
-> TL;DR  
-> 1) `docker compose up -d`  
-> 2) Open `http://localhost:8080`  
-> 3) Sign in with Plex → Choose your server → Done
+This runs entirely in **Docker** and includes a web UI, Python logic, and a guided **Plex login & server setup wizard**. No manual token copying required.
+
+---
+
+## ⚡ TL;DR (Quick Start if you already have Docker)
+
+1) Download the app (clone or ZIP), open a terminal in the project folder, then:
+
+    docker compose up -d
+
+2) Open your browser at:
+
+    http://localhost:8080
+
+3) Click **Setup** → **Sign in with Plex** → choose your server → **Save** → **Initialize / Refresh TV Shows** → pick shows → assign timeslots → **Generate Playlist**.
+
+---
+
+## 🐳 Install Docker (if you’ve never used it)
+
+You only have to do this once.
+
+### Windows or macOS
+1. Download Docker Desktop:  https://www.docker.com/products/docker-desktop/
+2. Install and launch it once so it finalizes setup.
+3. Verify in a terminal:
+
+       docker --version
+       docker compose version
+
+If either command fails, restart your computer and try again.
+
+### Linux
+1. Install Docker Engine:  https://docs.docker.com/engine/install/
+2. Install Docker Compose plugin:  https://docs.docker.com/compose/install/linux/
+3. Verify:
+
+       docker --version
+       docker compose version
+
+---
+
+## ⬇️ Get the App Files
+
+Choose one:
+
+**A) Download ZIP (easiest, no Git required)**
+- Go to the GitHub repo page.
+- Click **Code** → **Download ZIP**.
+- Unzip it somewhere easy (e.g., your Desktop).
+- Open a terminal in that unzipped folder.
+
+**B) Clone with Git (power users)**
+
+    git clone https://github.com/markingold/plex-tv-playlist-app.git
+    cd plex-tv-playlist-app
+
+---
+
+## 🚀 Start the App
+
+From the project folder:
+
+    docker compose up -d
+
+This builds and starts a single container. When it’s ready, open:
+
+    http://localhost:8080
+
+You’ll see the web UI.
+
+---
+
+## 🧭 First‑Run Setup (in the Web UI)
+
+1) Go to **Setup**.
+2) Click **Sign in with Plex** (PIN flow).
+   - A Plex page opens — approve access.
+   - The app auto-detects your **Plex servers** and shows them in a list.
+3) Select your server and click **Save to .env**.
+   - The app tests connectivity and writes `PLEX_URL`, `PLEX_TOKEN`, and `PLEX_VERIFY_SSL` for you.
+4) Click **Initialize / Refresh TV Shows** to sync your TV libraries.
+5) Go to **Edit Shows** and select the shows you want included.
+6) Go to **Timeslots**, assign each show a unique slot (1..N), and click **Generate Playlist**.
+   - The app creates (or clears) the target playlist and fills it in round‑robin order.
+
+That’s it. Open Plex → Playlists to see it.
 
 ---
 
 ## ✨ Features
 
-- Plex PIN login (auth.plex.tv) with server selection and token validation
-- No local Python setup: Python + deps are baked into the container
-- Click‑and‑go web UI (Bootstrap)
-- Round‑robin playlist generation across shows
-- Persistent DB & logs (`./database`, `./logs`)
-- Auto-detects Plex token, server URL, and SSL settings
-- Self-signed Plex? Just click "Use insecure connection"
+- Round‑robin episode scheduling across multiple shows.
+- Built‑in **Plex PIN login** and **server discovery** (no manual token copying).
+- Works with local IPs, `plex.direct`, HTTPS, and self‑signed certs.
+- All Python logic is bundled; no local Python needed.
+- Persistent **SQLite database** and **logs** on your host machine.
+- Healthcheck endpoint and a **debug tool** for deeper troubleshooting.
 
 ---
 
-## 🧱 What’s in the box
+## 📂 What’s in the Project
 
     .
-    ├── docker-compose.yml             # One service: php-apache + embedded Python
-    ├── Dockerfile                     # Multi-stage: Python deps + PHP runtime
-    ├── docker/entrypoint.sh           # Bootstraps .env, fixes permissions, ensures dirs
-    ├── .env.example                   # Legacy manual env; optional now
-    ├── public/
-    │   ├── index.php                  # Setup wizard entry
-    │   ├── _env.php                   # Reads/writes .env, handles Plex Auth flow
-    │   ├── plex_auth.php             # PIN login and server token probing
-    │   ├── _bootstrap.php             # PHP helpers (paths, Python exec)
-    │   ├── header.php                 # Header layout
-    │   ├── partials/                  # Shared layout components
-    │   ├── add_shows.php              # Select shows
-    │   └── timeslots.php              # Assign timeslots & generate playlist
-    ├── scripts/
-    │   ├── populateShows.py           # Build `allShows` from Plex
-    │   ├── getEpisodes.py             # Fill `playlistEpisodes`
-    │   ├── newPlaylist.py             # Create empty Plex playlist
-    │   ├── generatePlaylist.py        # Round-robin add episodes to playlist
-    │   └── plex_debug_dump.py         # CLI diagnostic tool (token test, library listing)
-    ├── run.sh                         # Optional CLI bootstrap script
-    ├── database/                      # SQLite DB (mounted volume)
-    ├── logs/                          # Logs (per script run)
-    └── README.md                      # This file
+    ├── docker-compose.yml          # One service: PHP+Apache with Python baked in
+    ├── Dockerfile                  # Multi-stage build (Python deps → PHP runtime)
+    ├── docker/entrypoint.sh        # Bootstraps .env, ensures writable dirs
+    ├── public/                     # Web UI (PHP)
+    │   ├── setup.php               # Plex login & server selection wizard
+    │   ├── add_shows.php           # Pick shows to include
+    │   ├── timeslots.php           # Assign slots & generate playlist
+    │   ├── _bootstrap.php          # PHP helpers (run Python scripts)
+    │   ├── _env.php                # .env read/write helpers
+    │   └── plex_auth.php           # PIN flow, resource discovery, .env save
+    ├── scripts/                    # Python logic
+    │   ├── populateShows.py        # Pull shows into SQLite
+    │   ├── getEpisodes.py          # Pull episodes for selected shows
+    │   ├── newPlaylist.py          # Create/clear target playlist
+    │   ├── generatePlaylist.py     # Build round‑robin order & add items
+    │   └── plex_debug_dump.py      # Deep-dive debug tool (URL/token checks)
+    ├── database/                   # SQLite DB lives here
+    ├── logs/                       # Script and auth logs
+    ├── .env.example                # Sample configuration (docs/defaults)
+    └── README.md                   # This file
 
 ---
 
-## ⚙️ Requirements
+## 🧪 Optional: Run Scripts Manually (inside the Container)
 
-- Docker / Docker Compose v2+
-- A reachable Plex Media Server on your local network or remote
-- Plex account credentials (PIN login used)
+Open a shell inside the running container:
 
-**✅ Tested on:**  
-✔️ macOS (Docker Desktop)  
-✔️ Linux (Debian/Ubuntu)  
-✔️ Windows (via WSL2 or native Docker)  
-✔️ Unraid (Docker tab + `docker-compose.yml` or via stack templates)
+    docker compose exec plex-playlist bash
+
+From there you can run:
+
+    python scripts/populateShows.py
+    python scripts/getEpisodes.py
+    python scripts/newPlaylist.py
+    python scripts/generatePlaylist.py
+
+Handy for debugging.
 
 ---
 
-## 🛫 Quick Start (Zero-Config)
+## 🗃️ Data & Logs on Your Host
 
-1) Clone and launch:
+- Database:  `./database/plex_playlist.db`
+- Logs:      `./logs/*.log`
+- Config:    `./.env` (auto-written by the setup wizard)
 
-```bash
-git clone https://github.com/markingold/plex-tv-playlist-app.git
-cd plex-tv-playlist-app
-docker compose up -d
-Open your browser to:
+These paths are mounted into the container, so they persist across updates.
 
-arduino
-Always show details
+---
 
-Copy code
-http://localhost:8080
-Use the Setup Wizard:
+## 🔁 Upgrading
 
-Click “Sign in with Plex”
+If you cloned with Git:
 
-Authorize your account
+    git pull
+    docker compose up -d --build
 
-Select your Plex server
+If you used a ZIP:
+- Download the new ZIP and replace the files (keep your `database/` and `logs/` folders).
+- Then run:
 
-Configure SSL options (self-signed or verified)
+    docker compose up -d --build
 
-The .env file will be saved automatically
+---
 
-You’ll land on the Show Selection page once setup is complete.
+## 🧼 Reset / Start Fresh
 
-🧰 Manual .env Mode (Advanced / Legacy)
-You can still use .env manually if you prefer:
+    docker compose down
+    rm -rf database/*.db logs/*
+    docker compose build --no-cache
+    docker compose up -d
 
-bash
-Always show details
+---
 
-Copy code
-cp .env.example .env
-Edit the file and set:
+## 🛠 Troubleshooting
 
-PLEX_URL — e.g. https://192.168.1.50:32400
+**Can’t find/connect to Plex?**
+- Make sure Plex is running and reachable on your network.
+- Use the **Plex Sign-In** in the Setup page (it auto-discovers your servers).
+- If your Plex uses a self‑signed cert, uncheck “Verify SSL” in the wizard when saving.
 
-PLEX_TOKEN — Plex token (get via Plex Web → Account → Devices)
+**Playlist didn’t fill?**
+- Ensure you selected shows and assigned **unique** timeslots before generating.
+- Re-run **Initialize / Refresh TV Shows** if you recently added libraries.
 
-PLEX_VERIFY_SSL — false for self-signed certs or plex.direct
+**Advanced: token/URL mismatches**
+- Use the debug tool (inside the container):
 
-▶️ Walkthrough
-Start the app
+      python scripts/plex_debug_dump.py --url "YOUR_PLEX_URL" --token "YOUR_TOKEN" --verify true
 
-bash
-Always show details
+- You can also pass `--compare-url "a_plex_url_that_contains_X-Plex-Token=..."` to compare tokens.
 
-Copy code
-docker compose up -d
-Visit http://localhost:8080
+---
 
-Authenticate with Plex
+## 🧠 How It Works
 
-Use the built-in PIN login
+1. Setup wizard logs into Plex (PIN), discovers your servers, and saves the correct **server token** to `.env`.
+2. You choose TV libraries and shows (via the UI).
+3. Scripts populate the database and create an empty playlist.
+4. Episodes are added in **round‑robin** order by timeslot.
 
-Select your server
+Schema created on first run:
 
-Verify connection (the app probes /identity to validate token)
+- `allShows(id, title, total_episodes)`
+- `playlistShows(id, title, total_episodes, timeSlot)`
+- `playlistEpisodes(ratingKey, season, episode, releaseDate, duration, summary, watchedStatus, title, episodeTitle, show_id, timeSlot)`
 
-Once complete, you're redirected to Show Selection
+---
 
-Choose Shows
+## 🧰 Unraid (and other NAS) Notes
 
-Select any shows you want to include
+You can run this anywhere that supports Docker. Two common approaches on Unraid:
 
-Submit to save them
+**A) Using Docker Compose (recommended)**
+- SSH into your Unraid box (or use the Compose Manager plugin).
+- Place the project folder somewhere persistent (e.g., `/mnt/user/appdata/plex-tv-playlist-app`).
+- From that folder:
 
-Assign Timeslots & Generate
+      docker compose up -d
 
-Each show needs a unique slot (1, 2, 3…)
+- Access on your LAN: `http://<unraid-ip>:8080`
 
-Click “Generate Playlist”
+**B) Using plain Docker commands**
+- Build the image:
 
-The app runs:
+      docker build -t plex-tv-playlist-app .
 
-getEpisodes.py
+- Run the container:
 
-newPlaylist.py
+      docker run -d \
+        --name plex-playlist \
+        -p 8080:80 \
+        -v $(pwd)/database:/var/www/html/database \
+        -v $(pwd)/logs:/var/www/html/logs \
+        plex-tv-playlist-app
 
-generatePlaylist.py <ratingKey>
+---
 
-🐳 Unraid / Other Hosts
-Unraid Options:
+## 🔐 Security Tips
 
-Use the docker-compose.yml in Unraid’s “Stacks” tab (via Compose Manager plugin)
+- Treat your `PLEX_TOKEN` like a password (the wizard saves it to `.env`).
+- Don’t post real tokens or IPs publicly.
+- If exposing the web UI outside your LAN, use a reverse proxy with TLS and auth.
 
-Or manually create a Docker container with:
+---
 
-Image: php:apache
+## 🤝 Contributing
 
-Mount plex-tv-playlist-app repo into /var/www/html
+PRs welcome! Please:
+- Keep `.env.example` current.
+- Don’t commit real tokens or `.env`.
+- Follow the log style: `[INFO]`, `[WARN]`, `[SUCCESS]`, `[ERROR]`.
 
-Set working directory
+---
 
-Run the run.sh script or use docker exec to manually run Python scripts
+## 📜 License
 
-Alternative Docker Hosts:
-
-Docker Desktop (Mac, Windows): works out of the box
-
-WSL2: use host.docker.internal to reach host Plex server
-
-Remote: if your Plex server is cloud-hosted, ensure it’s accessible
-
-🧪 Scripts / Shell Access
-Access container shell:
-
-bash
-Always show details
-
-Copy code
-docker compose exec plex-playlist bash
-Run any script manually:
-
-bash
-Always show details
-
-Copy code
-python /var/www/html/scripts/populateShows.py
-python /var/www/html/scripts/plex_debug_dump.py --token ... --url ...
-🗃️ Data & Logs
-database/plex_playlist.db — SQLite database
-
-logs/*.log — Script logs (one per run)
-
-.env — Auto-generated by the Setup Wizard
-
-Reset state:
-
-bash
-Always show details
-
-Copy code
-docker compose down
-rm -rf database/*.db logs/* .env
-docker compose build --no-cache
-docker compose up -d
-🔐 Security Notes
-.env contains your Plex token. Never commit it!
-
-The app auto-creates .env but will never overwrite it without consent
-
-If exposing publicly, use a reverse proxy with HTTPS and authentication
-
-🧠 Under the Hood
-populateShows.py → builds allShows
-
-getEpisodes.py → builds playlistEpisodes
-
-newPlaylist.py → creates playlist
-
-generatePlaylist.py → adds episodes round-robin
-
-UI flows: index.php → add_shows.php → timeslots.php
-
-🧩 Dev Tips
-Use run.sh to bootstrap locally
-
-Debug token/server issues with plex_debug_dump.py
-
-Logs and DB are persistent between container restarts
-
-The PHP helper _bootstrap.php includes helpers for safely running Python
-
-🤝 Contributing
-Pull requests welcome!
-
-Please:
-
-Use consistent logging styles ([INFO], [WARN], [ERROR])
-
-Keep .env.example current
-
-Do not commit .env or any real tokens/URLs
-
-📜 License
-MIT — see LICENSE
+MIT — see `LICENSE`.

@@ -61,7 +61,7 @@ require __DIR__ . '/partials/nav.php';
 ?>
 <div class="container py-4" style="max-width:900px;">
   <h2 class="mb-3">Setup</h2>
-  <p class="text-muted">Sign in with Plex to auto-discover your servers and save your settings. You can also test connectivity and choose libraries manually.</p>
+  <p class="text-muted">Sign in with Plex to auto‑discover your server and save the connection. You can also run a connectivity test and pick libraries manually.</p>
 
   <?php if ($feedback): ?><div class="alert alert-success" style="white-space:pre-wrap;"><?= htmlspecialchars((string)$feedback) ?></div><?php endif; ?>
   <?php if ($error): ?><div class="alert alert-danger" style="white-space:pre-wrap;"><?= htmlspecialchars((string)$error) ?></div><?php endif; ?>
@@ -72,31 +72,41 @@ require __DIR__ . '/partials/nav.php';
       <h5 class="card-title">Sign in with Plex</h5>
       <div id="plex-auth-area">
         <button id="plex-auth-start" class="btn btn-warning">Sign in with Plex</button>
+
         <div id="plex-auth-step" class="mt-3" style="display:none;">
-          <p>Open this link and approve access. Then return here — we’ll auto-detect when it’s complete.</p>
-          <p>
-            <a id="plex-auth-link" href="#" target="_blank" class="btn btn-warning">Open Plex Auth</a>
-          </p>
-          <!-- Make these readable on dark background -->
-          <p class="mb-0 text-light">Code: <span id="plex-auth-code" class="text-light"></span></p>
-          <p class="text-light">Expires at: <span id="plex-auth-exp" class="text-light"></span></p>
+          <p>We opened Plex in a new tab to approve access. If nothing opened, allow pop‑ups for this site and click the button again.</p>
+
+          <!-- Advanced details for power users -->
+          <details id="plex-auth-advanced" class="mt-2">
+            <summary>Advanced: show PIN details</summary>
+            <div class="small text-muted mt-2">
+              <div>Code: <code id="plex-auth-code">—</code></div>
+              <div>Expires at: <code id="plex-auth-exp">—</code></div>
+              <div>Token (after approval): <code id="plex-auth-token">—</code></div>
+              <div class="mt-1">Auth URL: <code id="plex-auth-link"></code></div>
+            </div>
+          </details>
         </div>
+
         <div id="plex-server-pick" class="mt-3" style="display:none;">
           <h6>Choose your Plex Server</h6>
           <div id="plex-server-list" class="mb-2"></div>
-          <div class="mb-2">
-            <input type="text" class="form-control bg-dark text-light border-secondary" id="manual-server-url"
-                   placeholder="http://192.168.x.x:32400 (optional)">
-          </div>
-          <div class="form-check form-switch mb-2">
-            <input class="form-check-input" type="checkbox" id="plex-verify-ssl" checked>
-            <label class="form-check-label" for="plex-verify-ssl">Verify SSL (use for valid HTTPS)</label>
-          </div>
-          <div class="form-check mb-2">
-            <input class="form-check-input" type="checkbox" id="plex-force-save">
-            <label class="form-check-label" for="plex-force-save">Force save even if connectivity check fails</label>
-          </div>
-          <button id="plex-save-env" class="btn btn-success">Save to .env</button>
+
+          <!-- Advanced options: manual URL + SSL toggle -->
+          <details id="plex-advanced-options" class="mt-2">
+            <summary>Advanced options</summary>
+            <div class="mt-2">
+              <label for="manual-server-url" class="form-label small text-muted mb-1">Manual server URL (optional)</label>
+              <input type="text" class="form-control bg-dark text-light border-secondary" id="manual-server-url"
+                     placeholder="http://192.168.x.x:32400">
+              <div class="form-check form-switch mt-3">
+                <input class="form-check-input" type="checkbox" id="plex-verify-ssl" checked>
+                <label class="form-check-label" for="plex-verify-ssl">Verify SSL (use for valid HTTPS)</label>
+              </div>
+            </div>
+          </details>
+
+          <button id="plex-save-env" class="btn btn-success mt-3">Save to .env</button>
           <div id="plex-save-result" class="mt-2 small"></div>
         </div>
 
@@ -158,21 +168,23 @@ function log(msg, obj) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-// ---- PIN flow (with manual + force save options) ----
+// ---- PIN flow (simplified UI; advanced details in <details>) ----
 const startBtn = document.getElementById('plex-auth-start');
 const stepDiv  = document.getElementById('plex-auth-step');
-const linkA    = document.getElementById('plex-auth-link');
 const codeEl   = document.getElementById('plex-auth-code');
 const expEl    = document.getElementById('plex-auth-exp');
+const tokenEl  = document.getElementById('plex-auth-token');
+const linkCode = document.getElementById('plex-auth-link');
+
 const pickDiv  = document.getElementById('plex-server-pick');
 const listDiv  = document.getElementById('plex-server-list');
 const saveBtn  = document.getElementById('plex-save-env');
 const saveRes  = document.getElementById('plex-save-result');
 const sslChk   = document.getElementById('plex-verify-ssl');
-const forceChk = document.getElementById('plex-force-save');
 
 let pinId = null;
 let token = null;
+let deeplink = null;
 let pollTimer = null;
 
 // Small helper around fetch -> JSON
@@ -191,49 +203,115 @@ startBtn?.addEventListener('click', async () => {
     log('Starting Plex PIN flow...');
     const j = await api('start', {});
     log('API start <-', j);
-    if (j.debug) log('DEBUG(start)', j.debug);
     if (!j.ok) { alert('Failed to start Plex auth: ' + (j.error||'')); startBtn.disabled = false; return; }
+
     pinId = j.pinId;
+    deeplink = j.deeplink || '';
     stepDiv.style.display = '';
-    linkA.href = j.deeplink;
-    codeEl.textContent = j.code || '';
-    expEl.textContent  = j.expiresAt || '';
-    window.open(j.deeplink, '_blank');
+
+    // Fill advanced fields
+    codeEl.textContent = j.code || '—';
+    expEl.textContent  = j.expiresAt || '—';
+    linkCode.textContent = deeplink || '—';
+
+    // Attempt to open Plex Auth automatically
+    if (deeplink) {
+      const w = window.open(deeplink, '_blank');
+      if (!w) {
+        log('Popup blocked; user must allow pop-ups or copy the Auth URL from Advanced.');
+      }
+    }
 
     // Poll until token
     pollTimer = setInterval(async () => {
       const r = await api('poll', {pinId});
       log('API poll <-', r);
-      if (r.debug) log('DEBUG(poll)', r.debug);
       if (!r.ok) { clearInterval(pollTimer); alert('Auth failed: ' + (r.error||'')); startBtn.disabled = false; return; }
       if (r.pending) return;
+
       clearInterval(pollTimer);
       token = r.token;
-      log('PIN authorized; token received.', { tokenPreview: token ? (token.slice(0,6) + '...') : null });
+      tokenEl.textContent = token ? (token.slice(0,6) + '...') : '—';
 
-      // Build server list with server ID (clientIdentifier) and token source previews
+      // ===== Simplified server picker: Recommended + Advanced =====
       listDiv.innerHTML = '';
-      const servers = Array.isArray(r.servers) ? r.servers : [];
-      if (servers.length > 0) {
-        servers.forEach((s, idx) => {
-          const id = 'srv_' + idx;
-          const serverId = s.id || s.clientIdentifier || '';
-          const label = `${s.name} — ${s.uri} ${s.local ? '(local)' : ''} ${s.https ? 'HTTPS' : ''}`
-            + (serverId ? ` — <small>id: ${serverId}</small>` : '')
-            + (Array.isArray(s.token_sources) && Array.isArray(s.token_previews) ? 
-               `<br><small>tokens: ${s.token_sources.map((src,i)=>`${src}:${s.token_previews[i]||''}`).join(', ')}</small>` : '');
 
-          const row = document.createElement('div');
-          row.className = 'form-check';
-          row.innerHTML = `
-            <input class="form-check-input" type="radio" name="serverUrl" value="${s.uri}" id="${id}" ${idx===0?'checked':''}
-                   data-server-id="${serverId}">
-            <label class="form-check-label" for="${id}">${label}</label>`;
-          listDiv.appendChild(row);
+      const serversRaw = Array.isArray(r.servers) ? r.servers : [];
+      // Normalize & de-dup by URI
+      const seen = new Set();
+      const servers = [];
+      for (const s of serversRaw) {
+        if (!s || !s.uri) continue;
+        const uri = String(s.uri).replace(/\/+$/,'');
+        if (seen.has(uri)) continue;
+        seen.add(uri);
+        servers.push({
+          name: s.name || 'Plex Server',
+          uri,
+          id: s.id || s.clientIdentifier || '',
+          local: !!s.local,
+          https: !!s.https || /^https:\/\//i.test(uri),
         });
       }
+
+      // Ranking: local+https > https > local > anything
+      const score = (x) => (x.local && x.https ? 4 : x.https ? 3 : x.local ? 2 : 1);
+      servers.sort((a,b) => score(b) - score(a));
+
+      const fmtBadges = (s) => {
+        const badges = [];
+        if (s.local)  badges.push('<span class="badge text-bg-secondary ms-2">Local</span>');
+        if (s.https)  badges.push('<span class="badge text-bg-success ms-1">HTTPS</span>');
+        return badges.join('');
+      };
+      const hostPort = (u) => { try { const uu = new URL(u); return uu.host; } catch { return u; } };
+
+      // Recommended
+      const recommended = servers[0];
+      if (recommended) {
+        const id = 'srv_recommended';
+        const row = document.createElement('div');
+        row.className = 'form-check mb-2';
+        row.innerHTML = `
+          <div class="mb-1 small text-muted">Recommended</div>
+          <input class="form-check-input" type="radio" name="serverUrl" value="${recommended.uri}" id="${id}" checked
+                 data-server-id="${recommended.id}">
+          <label class="form-check-label" for="${id}">
+            ${recommended.name} — ${hostPort(recommended.uri)} ${fmtBadges(recommended)}
+            ${recommended.id ? `<br><small class="text-muted">id: ${recommended.id}</small>` : ''}
+          </label>`;
+        listDiv.appendChild(row);
+      }
+
+      // Advanced (collapsed): alternate routes
+      if (servers.length > 1) {
+        const details = document.createElement('details');
+        details.className = 'mt-2';
+        const count = servers.length - 1;
+        details.innerHTML = `<summary>Advanced: show ${count} alternate route${count===1?'':'s'}</summary>`;
+        const advWrap = document.createElement('div');
+        advWrap.className = 'mt-2';
+
+        servers.slice(1).forEach((s, idx) => {
+          const id = `srv_alt_${idx}`;
+          const row = document.createElement('div');
+          row.className = 'form-check mb-1';
+          row.innerHTML = `
+            <input class="form-check-input" type="radio" name="serverUrl" value="${s.uri}" id="${id}"
+                   data-server-id="${s.id}">
+            <label class="form-check-label" for="${id}">
+              ${s.name} — ${hostPort(s.uri)} ${fmtBadges(s)}
+              ${s.id ? `<br><small class="text-muted">id: ${s.id}</small>` : ''}
+            </label>`;
+          advWrap.appendChild(row);
+        });
+
+        details.appendChild(advWrap);
+        listDiv.appendChild(details);
+      }
+
       pickDiv.style.display = '';
-      saveRes.textContent = 'Signed in to Plex. If Plex showed an error page, it’s safe to ignore — authentication succeeded.';
+      saveRes.textContent = 'Signed in! Pick the recommended server or open Advanced for alternates / manual settings.';
     }, 1500);
   } catch (e) {
     log('Exception during start', {error: String(e)});
@@ -262,11 +340,10 @@ saveBtn?.addEventListener('click', async () => {
   try {
     const body = new URLSearchParams({
       action: 'save',
-      token,
+      token,                 // kept for backward compatibility; backend prefers per-server token from session
       serverUrl,
-      serverId,
-      verifySsl: sslChk.checked ? 'true' : 'false',
-      forceSave: forceChk.checked ? 'true' : 'false'
+      serverId,              // optional echo
+      verifySsl: (document.getElementById('plex-verify-ssl')?.checked ? 'true' : 'false')
     });
 
     const res = await fetch('plex_auth.php', {
@@ -279,14 +356,11 @@ saveBtn?.addEventListener('click', async () => {
     clearTimeout(t);
 
     log('API save <-', j);
-    if (j.debug) log('DEBUG(save)', j.debug);
 
     if (!j.ok) {
       if (Array.isArray(j.probes)) {
-        log('Probe details', j.probes);
         const lines = j.probes.map(p => {
-          return `- url=${p.candidateUrl} token=${p.tokenPreview} src=${p.tokenSource} code=${p.code} ok=${p.ok} err=${p.err||'n/a'}`
-            + (p.identity && p.identity.machineIdentifier ? ` id=${p.identity.machineIdentifier}` : '');
+          return `- url=${p.candidateUrl || p.url || 'n/a'} code=${p.code ?? 'n/a'} ok=${p.ok ? 'true':'false'} err=${p.err||'n/a'}`;
         });
         saveRes.textContent = 'Save failed: ' + (j.error || 'Unknown') + '\n' + lines.join('\n');
       } else {
